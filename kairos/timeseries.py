@@ -572,14 +572,16 @@ class Timeseries(object):
     else:
       rval = self._get( name, interval, config, timestamp, fetch=fetch, process_row=process_row )
 
-    # If condensed, collapse the result into a single row
-    if condense and not config['coarse']:
-      condense = condense if callable(condense) else self._condense
-      rval = { config['i_calc'].normalize(timestamp) : condense(rval) }
+    # If condensed, collapse the result into a single row. Adjust the step_size
+    # calculation to match.
     if config['coarse']:
       step_size = config['i_calc'].step_size(timestamp)
     else:
       step_size = config['r_calc'].step_size(timestamp)
+    if condense and not config['coarse']:
+      condense = condense if callable(condense) else self._condense
+      rval = { config['i_calc'].normalize(timestamp) : condense(rval) }
+      step_size = config['i_calc'].step_size(timestamp)
 
     if transform:
       for k,v in rval.items():
