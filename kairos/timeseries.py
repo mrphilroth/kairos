@@ -76,7 +76,7 @@ class RelativeTime(object):
     return the time in seconds between them after adjusting for what buckets
     they alias to. If t1 and t0 resolve to the same bucket, 
     '''
-    if t0 and t1:
+    if t0!=None and t1!=None:
       tb0 = self.to_bucket( t0 )
       tb1 = self.to_bucket( t1, steps=1 ) # NOTE: "end" of second bucket
       if tb0==tb1:
@@ -163,7 +163,10 @@ class GregorianTime(object):
       tb1 = self.to_bucket( t1, steps=1 ) # NOTE: "end" of second bucket
     else:
       tb1 = self.to_bucket( t0, steps=1 )
-    return self.from_bucket(tb1) - self.from_bucket(tb0)
+    
+    # Calculate the difference in days, then multiply by simple scalar
+    days = (self.from_bucket(tb1, native=True) - self.from_bucket(tb0, native=True)).days
+    return days * SIMPLE_TIMES['d']
 
   def to_bucket(self, timestamp, steps=0):
     '''
@@ -185,7 +188,7 @@ class GregorianTime(object):
 
     return int(dt.strftime( self.FORMATS[self._step] ))
 
-  def from_bucket(self, bucket):
+  def from_bucket(self, bucket, native=False):
     '''
     Calculate the timestamp given a bucket.
     '''
@@ -198,6 +201,8 @@ class GregorianTime(object):
       normal = datetime(year=int(year), month=1, day=1) + timedelta(weeks=int(week))
     else:
       normal = datetime.strptime(bucket, self.FORMATS[self._step])
+    if native:
+      return normal
     return long(time.mktime( normal.timetuple() ))
 
   def buckets(self, start, end):
