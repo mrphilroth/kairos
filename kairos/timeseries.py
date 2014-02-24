@@ -785,6 +785,8 @@ class Series(Timeseries):
       data = max( data or [0])
     elif transform=='sum':
       data = sum( data )
+    elif transform=='rate':
+      data = len( data ) / float(step_size)
     elif callable(transform):
       data = transform(data, step_size)
     return data
@@ -838,6 +840,8 @@ class Histogram(Timeseries):
       data = max(data.keys() or [0])
     elif transform=='sum':
       data = sum( k*v for k,v in data.items() )
+    elif transform=='rate':
+      data = { k:v/float(step_size) for k,v in data.items() }
     elif callable(transform):
       data = transform(data, step_size)
     return data
@@ -883,7 +887,9 @@ class Count(Timeseries):
     Transform the data. If the transform is not supported by this series,
     returns the data unaltered.
     '''
-    if callable(transform):
+    if transform=='rate':
+      data = data / float(step_size)
+    elif callable(transform):
       data = transform(data, step_size)
     return data
 
@@ -977,6 +983,8 @@ class Set(Timeseries):
       data = max(data or [0])
     elif transform=='sum':
       data = sum(data)
+    elif transform=='rate':
+      data = len(data) / float(step_size)
     elif callable(transform):
       data = transform(data)
     return data
