@@ -70,6 +70,20 @@ class RelativeTime(object):
   def __init__(self, step=1):
     self._step = step
 
+  def step_size(self, t0=None, t1=None):
+    '''
+    Return the time in seconds of a step. If a begin and end timestamp,
+    return the time in seconds between them after adjusting for what buckets
+    they alias to. If t1 and t0 resolve to the same bucket, 
+    '''
+    if t0 and t1:
+      tb0 = self.to_bucket( t0 )
+      tb1 = self.to_bucket( t1, steps=1 ) # NOTE: "end" of second bucket
+      if tb0==tb1:
+        return self._step
+      return self.from_bucket( tb1 ) - self.from_bucket( tb0 )
+    return self._step
+
   def to_bucket(self, timestamp, steps=0):
     '''
     Calculate the bucket from a timestamp, optionally including a step offset.
@@ -137,6 +151,19 @@ class GregorianTime(object):
 
   def __init__(self, step='daily'):
     self._step = step
+
+  def step_size(self, t0, t1=None):
+    '''
+    Return the time in seconds for each step. Requires that we know a time
+    relative to which we should calculate to account for variable length 
+    intervals (e.g. February)
+    '''
+    tb0 = self.to_bucket( t0 )
+    if t1:
+      tb1 = self.to_bucket( t1, steps=1 ) # NOTE: "end" of second bucket
+    else:
+      tb1 = self.to_bucket( t0, steps=1 )
+    return self.from_bucket(tb1) - self.from_bucket(tb0)
 
   def to_bucket(self, timestamp, steps=0):
     '''
@@ -544,9 +571,14 @@ class Timeseries(object):
     if condense and not config['coarse']:
       condense = condense if callable(condense) else self._condense
       rval = { config['i_calc'].normalize(timestamp) : condense(rval) }
+    if config['coarse']:
+      step_size = config['i_calc'].step_size(timestamp)
+    else:
+      step_size = config['r_calc'].step_size(timestamp)
+
     if transform:
       for k,v in rval.items():
-        rval[k] = self._process_transform(v, transform)
+        rval[k] = self._process_transform(v, transform, step_size)
     return rval
 
   def _get(self, name, interval, config, timestamp, fetch):
@@ -635,25 +667,25 @@ class Timeseries(object):
         for key in rval.iterkeys():
           data = condense( rval[key] )
           if transform and not collapse:
-            data = self._process_transform(data, transform)
+            data = self._process_transform(data, transform, config['i_calc'].step_size(key))
           rval[key] = data
       elif transform:
         for interval,resolutions in rval.items():
           for key in resolutions.iterkeys():
-            resolutions[key] = self._process_transform(resolutions[key], transform)
+            resolutions[key] = self._process_transform(resolutions[key], transform, config['r_calc'].step_size(key))
 
     if config['coarse'] or collapse:
       if collapse:
         collapse = collapse if callable(collapse) else condense if callable(condense) else self._condense
         data = collapse(rval)
         if transform:
-          rval = { rval.keys()[0] : self._process_transform(data, transform) }
+          rval = { rval.keys()[0] : self._process_transform(data, transform, config['i_calc'].step_size(rval.keys()[0], rval.keys()[-1])) }
         else:
           rval = { rval.keys()[0] : data }
 
       elif transform:
         for key,data in rval.items():
-          rval[key] = self._process_transform(data, transform)
+          rval[key] = self._process_transform(data, transform, config['i_calc'].step_size(key))
 
     return rval
 
@@ -683,17 +715,17 @@ class Timeseries(object):
           rval[i_key][r_key] = join( [res.get(i_key,{}).get(r_key) for res in results] )
     return rval
 
-  def _process_transform(self, data, transform):
+  def _process_transform(self, data, transform, step_size):
     '''
     Process transforms on the data.
     '''
     if isinstance(transform, (list,tuple,set)):
-      return { t : self._transform(data,t) for t in transform }
+      return { t : self._transform(data,t,step_size) for t in transform }
     elif isinstance(transform, dict):
-      return { tn : self._transform(data,tf) for tn,tf in transform.items() }
-    return self._transform(data, transform)
+      return { tn : self._transform(data,tf,step_size) for tn,tf in transform.items() }
+    return self._transform(data,transform,step_size)
 
-  def _transform(self, data, transform):
+  def _transform(self, data, transform, step_size):
     '''
     Transform the data. If the transform is not supported by this series,
     returns the data unaltered.
@@ -736,7 +768,7 @@ class Series(Timeseries):
   def _type_no_value(self):
     return []
 
-  def _transform(self, data, transform):
+  def _transform(self, data, transform, step_size):
     '''
     Transform the data. If the transform is not supported by this series,
     returns the data unaltered.
@@ -754,7 +786,7 @@ class Series(Timeseries):
     elif transform=='sum':
       data = sum( data )
     elif callable(transform):
-      data = transform(data)
+      data = transform(data, step_size)
     return data
 
   def _process_row(self, data):
@@ -789,7 +821,7 @@ class Histogram(Timeseries):
   def _type_no_value(self):
     return {}
 
-  def _transform(self, data, transform):
+  def _transform(self, data, transform, step_size):
     '''
     Transform the data. If the transform is not supported by this series,
     returns the data unaltered.
@@ -807,7 +839,7 @@ class Histogram(Timeseries):
     elif transform=='sum':
       data = sum( k*v for k,v in data.items() )
     elif callable(transform):
-      data = transform(data)
+      data = transform(data, step_size)
     return data
 
   def _process_row(self, data):
@@ -846,13 +878,13 @@ class Count(Timeseries):
   def _type_no_value(self):
     return 0
 
-  def _transform(self, data, transform):
+  def _transform(self, data, transform, step_size):
     '''
     Transform the data. If the transform is not supported by this series,
     returns the data unaltered.
     '''
     if callable(transform):
-      data = transform(data)
+      data = transform(data, step_size)
     return data
 
   def insert(self, name, value=1, timestamp=None, **kwargs):
@@ -887,13 +919,13 @@ class Gauge(Timeseries):
     # TODO: resolve this disconnect with redis backend
     return 0
 
-  def _transform(self, data, transform):
+  def _transform(self, data, transform, step_size):
     '''
     Transform the data. If the transform is not supported by this series,
     returns the data unaltered.
     '''
     if callable(transform):
-      data = transform(data)
+      data = transform(data, step_size)
     return data
 
   def _process_row(self, data):
@@ -928,7 +960,7 @@ class Set(Timeseries):
   def _type_no_value(self):
     return set()
 
-  def _transform(self, data, transform):
+  def _transform(self, data, transform, step_size):
     '''
     Transform the data. If the transform is not supported by this series,
     returns the data unaltered.
